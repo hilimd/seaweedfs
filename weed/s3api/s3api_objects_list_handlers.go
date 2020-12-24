@@ -265,7 +265,7 @@ func (s3a *S3ApiServer) doListFilerEntries(client filer_pb.SeaweedFilerClient, d
 				} else {
 					var isEmpty bool
 					if isEmpty, err = s3a.isDirectoryAllEmpty(client, dir, entry.Name); err != nil {
-						return
+						glog.Errorf("check empty folder %s: %v", dir, err)
 					}
 					if !isEmpty {
 						eachEntryFn(dir, entry)
@@ -315,7 +315,7 @@ func (s3a *S3ApiServer) isDirectoryAllEmpty(filerClient filer_pb.SeaweedFilerCli
 	currentDir := parentDir + "/" + name
 	var startFrom string
 	var isExhausted bool
-	for fileCounter == 0 && !isExhausted {
+	for fileCounter == 0 && !isExhausted && err == nil {
 		err = filer_pb.SeaweedList(filerClient, currentDir, "", func(entry *filer_pb.Entry, isLast bool) error {
 			if entry.IsDirectory {
 				subDirs = append(subDirs, entry.Name)
