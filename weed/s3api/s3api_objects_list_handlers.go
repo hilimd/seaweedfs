@@ -310,13 +310,17 @@ func getListObjectsV1Args(values url.Values) (prefix, marker, delimiter string, 
 
 func (s3a *S3ApiServer) isDirectoryAllEmpty(filerClient filer_pb.SeaweedFilerClient, parentDir, name string) (isEmpty bool, err error) {
 	// println("+ isDirectoryAllEmpty", dir, name)
+	glog.V(4).Infof("+ isEmpty %s/%s", parentDir, name)
+	defer glog.V(4).Infof("- isEmpty %s/%s %v", parentDir, name, isEmpty)
 	var fileCounter int
 	var subDirs []string
 	currentDir := parentDir + "/" + name
 	var startFrom string
 	var isExhausted bool
+	var foundEntry bool
 	for fileCounter == 0 && !isExhausted && err == nil {
 		err = filer_pb.SeaweedList(filerClient, currentDir, "", func(entry *filer_pb.Entry, isLast bool) error {
+			foundEntry = true
 			if entry.IsDirectory {
 				subDirs = append(subDirs, entry.Name)
 			} else {
@@ -324,8 +328,12 @@ func (s3a *S3ApiServer) isDirectoryAllEmpty(filerClient filer_pb.SeaweedFilerCli
 			}
 			startFrom = entry.Name
 			isExhausted = isExhausted || isLast
+			glog.V(4).Infof("    * %s/%s isLast: %t", currentDir, startFrom, isLast)
 			return nil
 		}, startFrom, false, 8)
+		if !foundEntry {
+			break
+		}
 	}
 
 	if err != nil {
