@@ -4,43 +4,37 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"net"
-
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
 	ftpserver "github.com/fclairamb/ftpserverlib"
-	"google.golang.org/grpc"
+	"github.com/spf13/afero"
 )
 
 type FtpServerOption struct {
-	Filer            string
-	IP               string
+	S3Endpoint       string
+	Bucket           string
+	PublicIP         string
 	IpBind           string
 	Port             int
-	FilerGrpcAddress string
-	FtpRoot          string
-	GrpcDialOption   grpc.DialOption
 	PassivePortStart int
 	PassivePortStop  int
 }
 
-type SftpServer struct {
-	option      *FtpServerOption
-	ftpListener net.Listener
+type Server struct {
+	option *FtpServerOption
 }
 
-var _ = ftpserver.MainDriver(&SftpServer{})
-
 // NewServer returns a new FTP server driver
-func NewFtpServer(ftpListener net.Listener, option *FtpServerOption) (*SftpServer, error) {
+func NewFtpServer(option *FtpServerOption) (*Server, error) {
 	var err error
-	server := &SftpServer{
-		option:      option,
-		ftpListener: ftpListener,
-	}
-	return server, err
+	return &Server{
+		option: option,
+	}, err
 }
 
 // GetSettings returns some general settings around the server setup
-func (s *SftpServer) GetSettings() (*ftpserver.Settings, error) {
+func (s *Server) GetSettings() (*ftpserver.Settings, error) {
 	var portRange *ftpserver.PortRange
 	if s.option.PassivePortStart > 0 && s.option.PassivePortStop > s.option.PassivePortStart {
 		portRange = &ftpserver.PortRange{
@@ -50,9 +44,8 @@ func (s *SftpServer) GetSettings() (*ftpserver.Settings, error) {
 	}
 
 	return &ftpserver.Settings{
-		Listener:                 s.ftpListener,
 		ListenAddr:               fmt.Sprintf("%s:%d", s.option.IpBind, s.option.Port),
-		PublicHost:               s.option.IP,
+		PublicHost:               s.option.PublicIP,
 		PassiveTransferPortRange: portRange,
 		ActiveTransferPortNon20:  true,
 		IdleTimeout:              -1,
@@ -61,21 +54,52 @@ func (s *SftpServer) GetSettings() (*ftpserver.Settings, error) {
 }
 
 // ClientConnected is called to send the very first welcome message
-func (s *SftpServer) ClientConnected(cc ftpserver.ClientContext) (string, error) {
+func (s *Server) ClientConnected(cc ftpserver.ClientContext) (string, error) {
 	return "Welcome to SeaweedFS FTP Server", nil
 }
 
 // ClientDisconnected is called when the user disconnects, even if he never authenticated
-func (s *SftpServer) ClientDisconnected(cc ftpserver.ClientContext) {
+func (s *Server) ClientDisconnected(cc ftpserver.ClientContext) {
 }
 
 // AuthUser authenticates the user and selects an handling driver
-func (s *SftpServer) AuthUser(cc ftpserver.ClientContext, username, password string) (ftpserver.ClientDriver, error) {
-	return nil, nil
+func (s *Server) AuthUser(cc ftpserver.ClientContext, username, password string) (ftpserver.ClientDriver, error) {
+	accFs, _ := LoadFs(s, username, password)
+
+	return &ClientDriver{
+		Fs: accFs,
+	}, nil
 }
 
 // GetTLSConfig returns a TLS Certificate to use
 // The certificate could frequently change if we use something like "let's encrypt"
-func (s *SftpServer) GetTLSConfig() (*tls.Config, error) {
+func (s *Server) GetTLSConfig() (*tls.Config, error) {
 	return nil, errors.New("no TLS certificate configured")
+}
+
+type ClientDriver struct {
+	afero.Fs
+}
+
+// LoadFs loads a file system from an access description
+func LoadFs(s *Server, username string, password string) (afero.Fs, error) {
+	endpoint := s.option.S3Endpoint
+	region := "default"
+	bucket := s.option.Bucket
+
+	sess, errSession := session.NewSession(&aws.Config{
+		Endpoint:         aws.String(endpoint),
+		Region:           aws.String(region),
+		Credentials:      credentials.NewStaticCredentials(username, password, ""),
+		DisableSSL:       aws.Bool(true),
+		S3ForcePathStyle: aws.Bool(true),
+	})
+
+	if errSession != nil {
+		return nil, errSession
+	}
+
+	s3Fs := NewFs(bucket, sess)
+
+	return s3Fs, nil
 }
